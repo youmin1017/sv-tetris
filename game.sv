@@ -3,16 +3,19 @@ enum { DOWN, LEFT, RIGHT, ROTATE } operations;
 
 module game(
 	output logic[0:7] data_out[8],
+	output logic[3:0] com_score,
+   output logic[7:0] seg_score,
 	input  logic clk_1000, clk_6, restart,
    input  logic[3:0] op
 );
 
+logic[3:0] score[3:0]; // BCD score
 bit[0:7] Screen[8];
 int T[4][2];
 int center[2];
-int typeid, cnt, errno, gravity;
+int typeid, cnt, errno, gravity, score_idx;
 bit newT;
-
+bit gameend;
 parameter bit[0:7] NEW_GAME[8] = '{
     8'b11111111,
     8'b11111111,
@@ -22,15 +25,32 @@ parameter bit[0:7] NEW_GAME[8] = '{
     8'b11111111,
     8'b11111111,
     8'b11111111};
+	 
+	 
+parameter bit[0:7] END_GAME[8] = '{
+    8'b01111110,
+    8'b10111101,
+    8'b11011011,
+    8'b11100111,
+    8'b11100111,
+    8'b11011011,
+    8'b10111101,
+    8'b01111110};
 
 initial begin
   Screen = NEW_GAME;
   genTetromino(0, T, center, typeid);
   gravity = 0;
+  score_idx = 0;
+  com_score = 4'b1110;
+  gameend = 1;
 end
 
 always @( posedge clk_1000 ) begin
   data2out(Screen, data_out);
+  score_idx = (score_idx+1) % 4;
+  bcd2seg(score[score_idx], seg_score);
+  com_score = {com_score[2:0], com_score[3]};
   if(cnt == 2_100_000_000) cnt <= 0;
   // if(needed_generate_new_tetromino == 2) genTetromino(cnt%7, T, center, typeid);
   cnt <= cnt+1;
@@ -40,19 +60,28 @@ always_ff @( posedge clk_6 ) begin
   if(restart) begin
     Screen = NEW_GAME;
     genTetromino(cnt%7, T, center, typeid);
+	 for ( int i = 0; i < 4; i++ ) begin
+		score[i] <= 4'b0000;
+	 end
+	 gameend = 1;
   end
   
   gravity <= (gravity+1)%6; // this gravity is equal to 3hz
-  if( gravity == 3 ) begin
+  if( gravity == 3 && gameend ) begin:one 
     newT = 1;
     move(DOWN, Screen, T, center , newT);
+	 gameend = 1;
 	 if( newT ) begin
 	   check_horizontal(Screen);
+		score[0] <= ( score[0] == 9 ) ? 0 : score[0] + 1;
+      score[1] <= ( score[0] == 9 ) ? score[1] + 1  : score[1];
+      score[2] <= ( score[1] == 9 && score[0] == 9 ) ? score[2] + 1 : score[2];
+      score[3] <= ( score[2] == 9 && score[1] == 9 && score[0] == 9 ) ? score[3] + 1  : score[3];
 		genTetromino(cnt%7, T, center, typeid);
     end
   end
    
-  if( op ) begin
+  if( op && gameend) begin
     case(op)
       4'b0001: move(RIGHT , Screen, T, center, newT);
       4'b0010: move(ROTATE, Screen, T, center, newT);
@@ -82,6 +111,7 @@ task genTetromino (
 // Rotation Center
   parameter int Cen[7][2] = '{ '{3, 7}, '{2, 6}, '{2, 6}, '{3, 7}, '{2, 6}, '{2, 6}, '{2, 6} }; 
   
+  bit check = 1;
   typeid = id;
   center = Cen[id];
   case(id)
@@ -93,8 +123,19 @@ task genTetromino (
     5: tetromino = T;
     6: tetromino = Z;
   endcase
+ 
+  // if new tetromino hit cell
+  if(gameover(Screen, tetromino, gameend ))begin
+		Screen = END_GAME;
+		check = 0;
+  end
+  
   // After new tetromino generated, show it.
-  enable_tetromino(1, Screen, tetromino);
+  if (check) begin
+		enable_tetromino(1, Screen, tetromino);
+  end
+  
+  
 endtask
 
 task automatic enable_tetromino(
@@ -176,7 +217,16 @@ task automatic rotate(
   T[1] = (center[1] - y)/2;
 endtask
 
-task automatic check_horizontal( ref bit[0:7] Screen[8] );
+function automatic bit  gameover(ref bit [0:7] Screen[8], ref int T[4][2], ref bit gameend);
+		for (int i = 0; i < 4; ++i)begin
+			if ( Screen[ T[i][0] ][ T[i][1] ] == 0 )begin
+				gameend = 0;
+				gameover = 1;
+			end
+		end
+endfunction
+
+task automatic check_horizontal( ref bit[0:7] Screen[8]);
   for( int i=0; i < 8; ++i ) begin
     if( Screen[i] == 8'b00000000 ) begin
 	   drop(i, Screen);
@@ -203,6 +253,29 @@ task automatic data2out(
                     data_in[4][i],data_in[5][i],data_in[6][i],data_in[7][i],};
   end
 
+endtask
+
+task automatic bcd2seg(
+  input       [3:0] bcd,
+  output logic[7:0] seg
+);
+
+//always block for converting bcd digit into 7 segment format
+   case (bcd) //case statement
+    0 : seg = 7'b00000001;
+    1 : seg = 7'b01001111;
+    2 : seg = 7'b00010010;
+    3 : seg = 7'b00000110;
+    4 : seg = 7'b01001100;
+    5 : seg = 7'b00100100;
+    6 : seg = 7'b00100000;
+    7 : seg = 7'b00001111;
+    8 : seg = 7'b00000000;
+    9 : seg = 7'b00000100;
+    default : seg = 7'b1111111; 
+   endcase
+	
+	
 endtask
 
 endmodule
